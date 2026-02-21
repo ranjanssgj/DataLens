@@ -17,7 +17,18 @@ const PYTHON_SERVICE = process.env.PYTHON_SERVICE || 'http://localhost:8000';
 
 const chatSessions = {};
 
-app.use(cors());
+app.use(cors({
+    origin: [
+        'http://localhost:5173',
+        'http://localhost:3000',
+        /\.vercel\.app$/
+    ],
+    methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
+app.options('*', cors());
 app.use(express.json());
 
 connectDB();
