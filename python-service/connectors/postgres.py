@@ -10,7 +10,8 @@ class PostgresConnector:
             dbname=credentials.get("database"),
             user=credentials.get("username"),
             password=credentials.get("password"),
-            connect_timeout=10,
+            sslmode=credentials.get("sslmode", "prefer"),
+            connect_timeout=30,
         )
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 

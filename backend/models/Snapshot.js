@@ -67,6 +67,9 @@ const SnapshotSchema = new mongoose.Schema({
         droppedTables: [String],
         modifiedTables: [String],
     },
+    databaseSummary: String,
+    databaseDomain: String,
+    keyEntities: [String],
 });
 
 module.exports = mongoose.model('Snapshot', SnapshotSchema);

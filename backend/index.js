@@ -18,17 +18,33 @@ const PYTHON_SERVICE = process.env.PYTHON_SERVICE || 'http://localhost:8000';
 const chatSessions = {};
 
 app.use(cors({
-    origin: [
-        'http://localhost:5173',
-        'http://localhost:3000',
-        /\.vercel\.app$/
-    ],
-    methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+
+        const allowedOrigins = [
+            'http://localhost:5173',
+            'http://localhost:5174',
+            'http://localhost:5175',
+            'http://localhost:3000',
+            'http://127.0.0.1:5173',
+            'http://127.0.0.1:5174',
+        ];
+
+        const isVercel = origin.endsWith('.vercel.app');
+
+        if (allowedOrigins.includes(origin) || isVercel) {
+            callback(null, true);
+        } else {
+            callback(null, true);
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+    credentials: true,
+    optionsSuccessStatus: 200,
 }));
 
-app.options('*', cors());
+app.options(/.*/, cors());
 app.use(express.json());
 
 connectDB();
@@ -47,7 +63,19 @@ async function runFullSyncPipeline(connection, snapshotId) {
         schema: connection.schema,
     };
 
-    const extractRes = await axios.post(`${PYTHON_SERVICE}/extract`, credentials);
+    const callPython = async (label, fn) => {
+        try {
+            return await fn();
+        } catch (err) {
+            const detail = err.response?.data?.detail || err.response?.data || err.message;
+            console.error(`[SYNC] ${label} failed:`, JSON.stringify(detail));
+            throw new Error(`${label} failed: ${JSON.stringify(detail)}`);
+        }
+    };
+
+    const extractRes = await callPython('extract', () =>
+        axios.post(`${PYTHON_SERVICE}/extract`, credentials)
+    );
     const tables = extractRes.data.tables;
 
     let snapshot;
@@ -72,10 +100,13 @@ async function runFullSyncPipeline(connection, snapshotId) {
         });
     }
 
-    await axios.post(`${PYTHON_SERVICE}/quality/${snapshot._id}`, credentials);
+    await callPython('quality', () =>
+        axios.post(`${PYTHON_SERVICE}/quality/${snapshot._id}`, credentials)
+    );
 
     axios.post(`${PYTHON_SERVICE}/generate-docs/${snapshot._id}`, credentials).catch((err) => {
-        console.error('Background AI gen error:', err.message);
+        const detail = err.response?.data?.detail || err.message;
+        console.error('[SYNC] generate-docs error:', detail);
     });
 
     connection.lastSyncedAt = new Date();
@@ -83,6 +114,15 @@ async function runFullSyncPipeline(connection, snapshotId) {
 
     return snapshot;
 }
+
+
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: 'DataLens Express API',
+        timestamp: new Date().toISOString()
+    });
+});
 
 
 app.post('/api/connections', async (req, res) => {
@@ -113,6 +153,23 @@ app.delete('/api/connections/:id', async (req, res) => {
     }
 });
 
+app.post('/api/snapshots/:id/regenerate', async (req, res) => {
+    try {
+        const snapshot = await Snapshot.findById(req.params.id);
+        if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
+
+        await axios.post(`${PYTHON_SERVICE}/generate-docs/${req.params.id}`, {});
+        res.json({
+            success: true,
+            message: 'AI regeneration started',
+            pollUrl: `/api/snapshots/${req.params.id}/doc-status`,
+        });
+    } catch (err) {
+        const detail = err.response?.data?.detail || err.message;
+        res.status(500).json({ error: detail });
+    }
+});
+
 
 app.post('/api/connections/:id/sync', async (req, res) => {
     try {
@@ -121,10 +178,19 @@ app.post('/api/connections/:id/sync', async (req, res) => {
 
         const snapshot = await runFullSyncPipeline(connection, null);
 
-        res.json({ snapshotId: snapshot._id, message: 'Sync started, AI docs generating in background' });
+        res.json({
+            success: true,
+            snapshotId: snapshot._id.toString(),
+            message: 'Sync started. AI documentation generating in background.',
+            pollUrl: `/api/snapshots/${snapshot._id}/doc-status`,
+        });
     } catch (err) {
         console.error('Sync error:', err.message);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            hint: 'Make sure the Python service is running on port 8000',
+        });
     }
 });
 

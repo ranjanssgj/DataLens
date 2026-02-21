@@ -119,10 +119,7 @@ p {
 .page-title {
   font-size: 2rem;
   font-weight: 800;
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text-primary);
   margin-bottom: 8px;
 }
 
@@ -144,11 +141,8 @@ p {
 
 .navbar-logo {
   font-size: 1.1rem;
-  font-weight: 800;
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-weight: 700;
+  color: var(--text-primary);
   text-decoration: none;
   display: flex;
   align-items: center;
@@ -195,14 +189,10 @@ p {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px;
-  transition: var(--transition);
 }
 
 .card:hover {
   background: var(--bg-card-hover);
-  border-color: var(--border-accent);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-accent);
 }
 
 .card-clickable {
@@ -226,15 +216,12 @@ p {
 }
 
 .btn-primary {
-  background: var(--accent-gradient);
+  background: var(--accent);
   color: #fff;
-  box-shadow: var(--shadow-accent);
 }
 
 .btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-  box-shadow: 0 12px 40px rgba(99, 102, 241, 0.35);
+  background: var(--accent-hover);
 }
 
 .btn-secondary {
@@ -245,7 +232,6 @@ p {
 
 .btn-secondary:hover {
   background: var(--bg-card-hover);
-  border-color: var(--border-accent);
 }
 
 .btn-danger {
@@ -648,22 +634,19 @@ p {
 
 .sync-progress-overlay {
   background: var(--bg-card);
-  border: 1px solid var(--border-accent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 28px;
   text-align: center;
-  animation: fadeIn 0.3s ease;
 }
 
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -683,7 +666,7 @@ p {
 
 .sync-progress-bar-fill {
   height: 100%;
-  background: var(--accent-gradient);
+  background: var(--accent);
   border-radius: 2px;
   transition: width 0.5s ease;
 }

@@ -65,7 +65,7 @@ class ChatRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "DataLens Python Service"}
 
 
 @app.post("/extract")

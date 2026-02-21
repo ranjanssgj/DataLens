@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { getArtifacts, downloadArtifact, triggerDownload } from '../api'
+import { useNavigate } from 'react-router-dom'
+import { getArtifacts, downloadArtifact, triggerDownload, getConnections } from '../api'
 
 function formatBytes(bytes) {
     if (!bytes) return '0 B'
@@ -10,12 +11,27 @@ function formatBytes(bytes) {
 }
 
 export default function ArtifactsPage() {
+    const navigate = useNavigate()
     const [artifacts, setArtifacts] = useState([])
+    const [snapshotMap, setSnapshotMap] = useState({})
     const [loading, setLoading] = useState(true)
     const [downloading, setDownloading] = useState(null)
 
     useEffect(() => {
-        getArtifacts().then((res) => { setArtifacts(res.data); setLoading(false) })
+        Promise.all([
+            getArtifacts(),
+            getConnections(),
+        ]).then(([artRes, connRes]) => {
+            setArtifacts(artRes.data)
+            const map = {}
+            artRes.data.forEach(a => {
+                if (a.snapshotId && a.connectionName) {
+                    map[a.connectionName] = a.snapshotId
+                }
+            })
+            setSnapshotMap(map)
+            setLoading(false)
+        }).catch(() => setLoading(false))
     }, [])
 
     const handleDownload = async (artifact) => {
@@ -30,7 +46,13 @@ export default function ArtifactsPage() {
         }
     }
 
-    // Group by connectionName
+    const handleOpenDashboard = (artifact) => {
+        const snapshotId = artifact.snapshotId || snapshotMap[artifact.connectionName]
+        if (snapshotId) {
+            navigate(`/dashboard/${snapshotId}`)
+        }
+    }
+
     const grouped = artifacts.reduce((acc, a) => {
         const key = a.connectionName || 'Unknown'
         if (!acc[key]) acc[key] = []
@@ -48,7 +70,7 @@ export default function ArtifactsPage() {
         <div className="page">
             <div className="mb-24">
                 <h1 className="page-title">Artifacts</h1>
-                <p>Previously exported JSON and Markdown data dictionaries, available for re-download.</p>
+                <p style={{ color: 'var(--text-muted)' }}>Previously exported JSON and Markdown data dictionaries.</p>
             </div>
 
             {artifacts.length === 0 ? (
@@ -58,61 +80,88 @@ export default function ArtifactsPage() {
                     <p>Export a snapshot from the Dashboard to see files here.</p>
                 </div>
             ) : (
-                Object.entries(grouped).map(([connName, items]) => (
-                    <div key={connName} className="section">
-                        <div className="section-title">{connName}</div>
-                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Format</th>
-                                        <th>Filename</th>
-                                        <th>Size</th>
-                                        <th>Created</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {items.map((artifact) => (
-                                        <tr key={artifact._id}>
-                                            <td>
-                                                <span className={`badge ${artifact.format === 'json' ? 'badge-blue' : 'badge-purple'}`}>
-                                                    {artifact.format.toUpperCase()}
-                                                </span>
-                                            </td>
-                                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-primary)' }}>
-                                                {artifact.filename}
-                                            </td>
-                                            <td style={{ color: 'var(--text-muted)' }}>{formatBytes(artifact.sizeBytes)}</td>
-                                            <td style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-                                                {new Date(artifact.createdAt).toLocaleString()}
-                                            </td>
-                                            <td>
-                                                <button
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => handleDownload(artifact)}
-                                                    disabled={downloading === artifact._id}
-                                                    id={`download-btn-${artifact._id}`}
-                                                >
-                                                    {downloading === artifact._id ? (
-                                                        <span className="spinner" style={{ width: 12, height: 12 }} />
-                                                    ) : (
-                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                                            <polyline points="7 10 12 15 17 10" />
-                                                            <line x1="12" y1="15" x2="12" y2="3" />
-                                                        </svg>
-                                                    )}
-                                                    Download
-                                                </button>
-                                            </td>
+                Object.entries(grouped).map(([connName, items]) => {
+                    const snapshotId = items.find(a => a.snapshotId)?.snapshotId
+                    return (
+                        <div key={connName} className="section">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <div className="section-title" style={{ marginBottom: 0 }}>{connName}</div>
+                                {snapshotId && (
+                                    <button
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => navigate(`/dashboard/${snapshotId}`)}
+                                    >
+                                        Open Dashboard →
+                                    </button>
+                                )}
+                            </div>
+                            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Format</th>
+                                            <th>Filename</th>
+                                            <th>Size</th>
+                                            <th>Created</th>
+                                            <th>Actions</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {items.map((artifact) => (
+                                            <tr
+                                                key={artifact._id}
+                                                style={{ cursor: 'pointer' }}
+                                                onClick={() => handleOpenDashboard(artifact)}
+                                            >
+                                                <td onClick={e => e.stopPropagation()}>
+                                                    <span className={`badge ${artifact.format === 'json' ? 'badge-blue' : 'badge-purple'}`}>
+                                                        {artifact.format.toUpperCase()}
+                                                    </span>
+                                                </td>
+                                                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--text-primary)' }}>
+                                                    {artifact.filename}
+                                                </td>
+                                                <td style={{ color: 'var(--text-muted)' }}>{formatBytes(artifact.sizeBytes)}</td>
+                                                <td style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                                                    {new Date(artifact.createdAt).toLocaleString()}
+                                                </td>
+                                                <td onClick={e => e.stopPropagation()}>
+                                                    <div style={{ display: 'flex', gap: 6 }}>
+                                                        <button
+                                                            className="btn btn-secondary btn-sm"
+                                                            onClick={() => handleDownload(artifact)}
+                                                            disabled={downloading === artifact._id}
+                                                            id={`download-btn-${artifact._id}`}
+                                                        >
+                                                            {downloading === artifact._id ? (
+                                                                <span className="spinner" style={{ width: 12, height: 12 }} />
+                                                            ) : (
+                                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                                                    <polyline points="7 10 12 15 17 10" />
+                                                                    <line x1="12" y1="15" x2="12" y2="3" />
+                                                                </svg>
+                                                            )}
+                                                            Download
+                                                        </button>
+                                                        {artifact.snapshotId && (
+                                                            <button
+                                                                className="btn btn-secondary btn-sm"
+                                                                onClick={() => navigate(`/dashboard/${artifact.snapshotId}`)}
+                                                            >
+                                                                Dashboard
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
-                    </div>
-                ))
+                    )
+                })
             )}
         </div>
     )

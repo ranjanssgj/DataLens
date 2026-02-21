@@ -9,6 +9,6 @@ snowflake-connector-python
 pandas
 numpy
 scipy
-google-generativeai
+google-genai
 qdrant-client
 python-dotenv

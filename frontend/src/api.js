@@ -2,7 +2,10 @@ import axios from 'axios'
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000',
-    timeout: 120000,
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    timeout: 300000, // 5 minutes — needed for long sync operations
 })
 
 export const createConnection = (data) => api.post('/api/connections', data)

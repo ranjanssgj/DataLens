@@ -166,7 +166,8 @@ def _get_db_connection(db_type: str, credentials: dict):
             dbname=credentials.get("database"),
             user=credentials.get("username"),
             password=credentials.get("password"),
-            connect_timeout=10,
+            sslmode=credentials.get("sslmode", "prefer"),
+            connect_timeout=30,
         )
     elif db_type == "mysql":
         import mysql.connector
@@ -186,7 +187,7 @@ def _get_db_connection(db_type: str, credentials: dict):
             f"UID={credentials.get('username')};"
             f"PWD={credentials.get('password')}"
         )
-        return pyodbc.connect(conn_str, timeout=10)
+        return pyodbc.connect(conn_str, timeout=30)
     else:
         raise ValueError(f"Unsupported db_type for quality analysis: {db_type}")
 
@@ -196,7 +197,19 @@ def _load_sample(conn, db_type: str, table_name: str, col_names: list) -> pd.Dat
     if db_type == "mssql":
         query = f"SELECT TOP 10000 * FROM {safe_table}"
     else:
-        query = f"SELECT * FROM {safe_table} LIMIT 10000"
+        query = f'SELECT * FROM {safe_table} LIMIT 10000'
+
+    # psycopg2 doesn't directly support pd.read_sql — use cursor manually
+    if db_type == "postgres":
+        import psycopg2.extras
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute(query)
+        rows = cur.fetchall()
+        if rows:
+            return pd.DataFrame([dict(r) for r in rows])
+        else:
+            return pd.DataFrame(columns=col_names)
+
     return pd.read_sql(query, conn)
 
 
