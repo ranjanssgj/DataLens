@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import axios from 'axios'
 import { getArtifacts, downloadArtifact, triggerDownload, getConnections } from '../api'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 function formatBytes(bytes) {
     if (!bytes) return '0 B'
@@ -13,7 +16,7 @@ function formatBytes(bytes) {
 export default function ArtifactsPage() {
     const navigate = useNavigate()
     const [artifacts, setArtifacts] = useState([])
-    const [snapshotMap, setSnapshotMap] = useState({})
+    const [connectionMap, setConnectionMap] = useState({}) // connectionName → connectionId
     const [loading, setLoading] = useState(true)
     const [downloading, setDownloading] = useState(null)
 
@@ -23,13 +26,10 @@ export default function ArtifactsPage() {
             getConnections(),
         ]).then(([artRes, connRes]) => {
             setArtifacts(artRes.data)
+            // Build name → _id map from actual connections list
             const map = {}
-            artRes.data.forEach(a => {
-                if (a.snapshotId && a.connectionName) {
-                    map[a.connectionName] = a.snapshotId
-                }
-            })
-            setSnapshotMap(map)
+            connRes.data.forEach(c => { map[c.name] = c._id })
+            setConnectionMap(map)
             setLoading(false)
         }).catch(() => setLoading(false))
     }, [])
@@ -46,11 +46,20 @@ export default function ArtifactsPage() {
         }
     }
 
-    const handleOpenDashboard = (artifact) => {
-        const snapshotId = artifact.snapshotId || snapshotMap[artifact.connectionName]
-        if (snapshotId) {
-            navigate(`/dashboard/${snapshotId}`)
+    const handleOpenDashboard = async (artifact) => {
+        // Prefer connectionId from artifact, fallback to lookup by connection name
+        const connId = artifact.connectionId || connectionMap[artifact.connectionName]
+        if (connId) {
+            try {
+                const statusRes = await axios.get(`${API_BASE}/api/connections/${connId}/sync-status`)
+                if (statusRes.data.latestSnapshotId) {
+                    navigate(`/dashboard/${statusRes.data.latestSnapshotId}`)
+                    return
+                }
+            } catch (e) { /* fall through */ }
         }
+        // Last resort: use the snapshot ID embedded in the artifact itself
+        if (artifact.snapshotId) navigate(`/dashboard/${artifact.snapshotId}`)
     }
 
     const grouped = artifacts.reduce((acc, a) => {

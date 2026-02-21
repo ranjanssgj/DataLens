@@ -70,6 +70,8 @@ const SnapshotSchema = new mongoose.Schema({
     databaseSummary: String,
     databaseDomain: String,
     keyEntities: [String],
+    overallHealthAssessment: String,
+    criticalIssues: [String],
 });
 
 module.exports = mongoose.model('Snapshot', SnapshotSchema);

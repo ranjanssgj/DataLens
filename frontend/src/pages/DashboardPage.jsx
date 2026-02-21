@@ -13,6 +13,7 @@ import dagre from 'dagre'
 import 'reactflow/dist/style.css'
 import { getSnapshot } from '../api'
 import ExportButtons from '../components/ExportButtons'
+import ChatPanel from '../components/ChatPanel'
 import axios from 'axios'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
@@ -33,8 +34,8 @@ function formatBytes(bytes) {
     return `${s.toFixed(1)} ${units[i]}`
 }
 
-const StatCard = ({ label, value, color = 'var(--text-primary)' }) => (
-    <div style={{ textAlign: 'center', padding: '8px 4px' }}>
+const StatCard = ({ label, value, color = 'var(--text-primary)', tooltip }) => (
+    <div style={{ textAlign: 'center', padding: '8px 4px', position: 'relative' }} title={tooltip}>
         <div style={{ fontSize: 20, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value ?? '—'}</div>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
     </div>
@@ -215,7 +216,9 @@ export default function DashboardPage() {
     const [snapshot, setSnapshot] = useState(null)
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState('')
-    const [regenerating, setRegenerating] = useState(false)
+    const [regenStatus, setRegenStatus] = useState(null) // null | 'running' | 'complete' | 'failed'
+    const [regenProgress, setRegenProgress] = useState({ progress: 0, total: 0, currentTable: '' })
+    const [reindexStatus, setReindexStatus] = useState('idle') // idle, running, complete, failed
     const [refreshing, setRefreshing] = useState(false)
     const [nodes, setNodes, onNodesChange] = useNodesState([])
     const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -264,21 +267,53 @@ export default function DashboardPage() {
     }
 
     const handleRegenerate = async () => {
-        setRegenerating(true)
+        setRegenStatus('running')
+        setRegenProgress({ progress: 0, total: 0, currentTable: 'Starting...' })
         try {
             await axios.post(`${API_BASE}/api/snapshots/${snapshotId}/regenerate`)
-            const poll = setInterval(async () => {
+
+            const pollInterval = setInterval(async () => {
                 try {
-                    const res = await axios.get(`${API_BASE}/api/snapshots/${snapshotId}/doc-status`)
-                    if (res.data.status === 'complete' || res.data.status === 'failed') {
-                        clearInterval(poll)
-                        setRegenerating(false)
+                    const statusRes = await axios.get(`${API_BASE}/api/snapshots/${snapshotId}/doc-status`)
+                    const { status, progress, total, currentTable } = statusRes.data
+
+                    setRegenProgress({ progress: progress || 0, total: total || 0, currentTable: currentTable || '' })
+
+                    if (status === 'complete') {
+                        clearInterval(pollInterval)
+                        setRegenStatus('complete')
+                        // Clear cache and reload fresh snapshot with AI overview
                         sessionStorage.removeItem(`snapshot_${snapshotId}`)
-                        loadSnapshot(true)
+                        const freshData = await axios.get(`${API_BASE}/api/snapshots/${snapshotId}`)
+                        setSnapshot(freshData.data)
+                        sessionStorage.setItem(`snapshot_${snapshotId}`, JSON.stringify(freshData.data))
+                        applyGraph(freshData.data.tables ?? [], search)
+                    } else if (status === 'failed') {
+                        clearInterval(pollInterval)
+                        setRegenStatus('failed')
                     }
-                } catch { clearInterval(poll); setRegenerating(false) }
-            }, 5000)
-        } catch (e) { console.error(e); setRegenerating(false) }
+                } catch (e) {
+                    clearInterval(pollInterval)
+                    setRegenStatus('failed')
+                }
+            }, 3000)
+        } catch (err) {
+            console.error('[REGEN]', err.response?.data?.error || err.message)
+            setRegenStatus('failed')
+        }
+    }
+
+    const handleReIndex = async () => {
+        setReindexStatus('running')
+        try {
+            await axios.post(`${API_BASE}/api/snapshots/${snapshotId}/re-embed`)
+            setReindexStatus('complete')
+            setTimeout(() => setReindexStatus('idle'), 3000)
+        } catch (err) {
+            console.error('[RE-EMBED]', err.response?.data?.error || err.message)
+            setReindexStatus('failed')
+            setTimeout(() => setReindexStatus('idle'), 3000)
+        }
     }
 
     const handleNodeClick = useCallback((_, node) => {
@@ -303,7 +338,37 @@ export default function DashboardPage() {
     const avgQuality = tables.length > 0
         ? Math.round(tables.reduce((s, t) => s + (t.qualityScore || 0), 0) / tables.length)
         : 0
-    const tablesWithIssues = tables.filter(t => t.qualityFlags?.length > 0).length
+
+    // Overall completeness: average completeness across all columns in all tables
+    const allCompleteness = []
+    tables.forEach(table => {
+        table.columns?.forEach(col => {
+            if (col.quality?.completeness !== undefined) {
+                allCompleteness.push(col.quality.completeness)
+            }
+        })
+    })
+    const avgCompleteness = allCompleteness.length > 0
+        ? Math.round(allCompleteness.reduce((a, b) => a + b, 0) / allCompleteness.length)
+        : null
+
+    // Freshness: percentage of tables that are NOT stale (no STALE_DATA flag)
+    const staleTables = tables.filter(t => t.qualityFlags?.includes('STALE_DATA')).length
+    const freshnessScore = tables.length > 0
+        ? Math.round(((tables.length - staleTables) / tables.length) * 100)
+        : 100
+
+    // Key Health: percentage of tables with no PK issues and no FK violations
+    const keyIssues = tables.filter(t =>
+        t.qualityFlags?.some(f =>
+            f === 'NO_PRIMARY_KEY' ||
+            f === 'PK_DUPLICATE_VALUES' ||
+            f.startsWith('FK_VIOLATION')
+        )
+    ).length
+    const keyHealthScore = tables.length > 0
+        ? Math.round(((tables.length - keyIssues) / tables.length) * 100)
+        : 100
 
     return (
         <div className="page">
@@ -327,6 +392,12 @@ export default function DashboardPage() {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button
                         className="btn btn-secondary btn-sm"
+                        onClick={() => navigate('/connect')}
+                    >
+                        + Add Connection
+                    </button>
+                    <button
+                        className="btn btn-secondary btn-sm"
                         onClick={handleRefresh}
                         disabled={refreshing}
                     >
@@ -335,59 +406,122 @@ export default function DashboardPage() {
                     <button
                         className="btn btn-secondary btn-sm"
                         onClick={handleRegenerate}
-                        disabled={regenerating}
+                        disabled={regenStatus === 'running'}
                     >
-                        {regenerating ? 'Regenerating…' : 'Regen AI Docs'}
+                        {regenStatus === 'running' ? 'Generating…' : 'Regen AI Docs'}
                     </button>
+                    <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleReIndex}
+                        disabled={reindexStatus === 'running'}
+                    >
+                        {reindexStatus === 'running' ? 'Re-indexing…' : 'Re-index Vectors'}
+                    </button>
+                    {regenStatus === 'complete' && (
+                        <span style={{ color: '#22c55e', fontSize: 13 }}>✅ Done</span>
+                    )}
+                    {regenStatus === 'failed' && (
+                        <span style={{ color: '#ef4444', fontSize: 13 }}>❌ Failed</span>
+                    )}
+                    {reindexStatus === 'complete' && (
+                        <span style={{ color: '#22c55e', fontSize: 13 }}>✅ Indexed</span>
+                    )}
+                    {reindexStatus === 'failed' && (
+                        <span style={{ color: '#ef4444', fontSize: 13 }}>❌ Failed</span>
+                    )}
                     <ExportButtons snapshotId={snapshotId} />
                 </div>
             </div>
 
             {/* Stats Grid */}
-            <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(6, 1fr)',
-                gap: 1,
-                marginBottom: 28,
-                background: 'var(--border)',
-                borderRadius: 10,
-                overflow: 'hidden',
-            }}>
-                {[
-                    { label: 'Tables', value: snapshot.tableCount },
-                    { label: 'Total Rows', value: formatNum(snapshot.totalRows) },
-                    { label: 'Avg Quality', value: `${avgQuality}%` },
-                    { label: 'Tables w/ Issues', value: tablesWithIssues },
-                    { label: 'AI Docs', value: snapshot.aiGeneratedAt ? 'Ready' : 'Pending' },
-                    { label: 'DB Type', value: snapshot.dbType?.toUpperCase() },
-                ].map(s => (
-                    <div key={s.label} style={{ background: 'var(--bg-card)', padding: 16 }}>
-                        <StatCard {...s} />
-                    </div>
-                ))}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 1, marginBottom: 28, background: 'var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard label="Tables" value={snapshot.tableCount} />
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard label="Total Rows" value={formatNum(snapshot.totalRows)} />
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard label="Avg Quality" value={`${avgQuality}%`}
+                        color={avgQuality >= 80 ? '#22c55e' : avgQuality >= 60 ? '#f59e0b' : '#ef4444'} />
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard
+                        label="Completeness"
+                        value={avgCompleteness !== null ? `${avgCompleteness}%` : 'N/A'}
+                        color={avgCompleteness === null ? 'var(--text-primary)' : avgCompleteness >= 90 ? '#22c55e' : avgCompleteness >= 70 ? '#f59e0b' : '#ef4444'}
+                        tooltip="Average % of non-null values across all columns"
+                    />
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard
+                        label="Freshness"
+                        value={`${freshnessScore}%`}
+                        color={freshnessScore === 100 ? '#22c55e' : freshnessScore >= 80 ? '#f59e0b' : '#ef4444'}
+                        tooltip="% of tables with up-to-date data (no stale flag)"
+                    />
+                </div>
+                <div style={{ background: 'var(--bg-card)', padding: 16 }}>
+                    <StatCard
+                        label="Key Health"
+                        value={`${keyHealthScore}%`}
+                        color={keyHealthScore === 100 ? '#22c55e' : keyHealthScore >= 80 ? '#f59e0b' : '#ef4444'}
+                        tooltip="% of tables with valid PKs and no FK violations"
+                    />
+                </div>
             </div>
 
-            {/* AI Database Summary */}
-            {snapshot.databaseSummary && (
-                <div style={{
-                    padding: '14px 18px',
-                    marginBottom: 24,
-                    background: 'var(--bg-card)',
-                    borderRadius: 8,
-                    borderLeft: '3px solid var(--border-accent)',
-                }}>
-                    <h4 style={{ color: 'var(--text-secondary)', marginBottom: 6, fontWeight: 600 }}>Database Overview</h4>
-                    <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.875rem' }}>{snapshot.databaseSummary}</p>
-                    {snapshot.keyEntities?.length > 0 && (
-                        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Key entities:</span>
-                            {snapshot.keyEntities.map(e => (
-                                <span key={e} className="badge badge-purple" style={{ fontSize: 11 }}>{e}</span>
-                            ))}
+            {/* AI Database Overview — always shown */}
+            {(() => {
+                const dbSummary = snapshot.databaseSummary || null
+                const dbDomain = snapshot.databaseDomain || null
+                const healthAssessment = snapshot.overallHealthAssessment || null
+                const criticalIssues = snapshot.criticalIssues || []
+                const keyEntities = snapshot.keyEntities || []
+
+                if (!dbSummary) {
+                    return (
+                        <div style={{ background: '#0f172a', borderRadius: 12, padding: 24, marginBottom: 24, borderLeft: '4px solid #334155', textAlign: 'center' }}>
+                            <div style={{ color: '#475569', fontSize: 14 }}>
+                                AI overview not generated yet — click{' '}
+                                <strong style={{ color: '#6366f1', cursor: 'pointer' }} onClick={handleRegenerate}>Regen AI Docs</strong>{' '}
+                                or <strong style={{ color: '#6366f1', cursor: 'pointer' }} onClick={handleReIndex}>Re-index Vectors</strong>{' '}
+                                to generate
+                            </div>
                         </div>
-                    )}
-                </div>
-            )}
+                    )
+                }
+
+                return (
+                    <div style={{ background: '#0f172a', borderRadius: 12, padding: 24, marginBottom: 24, borderLeft: '4px solid #6366f1' }}>
+                        <div style={{ color: '#6366f1', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 8 }}>
+                            {dbDomain ? `${dbDomain} · ` : ''}Database Overview
+                        </div>
+                        <p style={{ color: '#e2e8f0', margin: '0 0 16px 0', lineHeight: 1.7, fontSize: 15 }}>{dbSummary}</p>
+                        {healthAssessment && (
+                            <p style={{ color: '#94a3b8', margin: '0 0 12px 0', fontSize: 13, lineHeight: 1.6 }}>
+                                <strong style={{ color: '#cbd5e1' }}>Health: </strong>{healthAssessment}
+                            </p>
+                        )}
+                        {criticalIssues.length > 0 && (
+                            <div style={{ marginBottom: 12 }}>
+                                <div style={{ color: '#f87171', fontSize: 12, fontWeight: 600, marginBottom: 6 }}>⚠ Critical Issues</div>
+                                {criticalIssues.map((issue, i) => (
+                                    <div key={i} style={{ color: '#fca5a5', fontSize: 12, marginLeft: 12, marginBottom: 4 }}>• {issue}</div>
+                                ))}
+                            </div>
+                        )}
+                        {keyEntities.length > 0 && (
+                            <div>
+                                <span style={{ color: '#64748b', fontSize: 12 }}>Key Entities: </span>
+                                {keyEntities.map(e => (
+                                    <span key={e} style={{ background: '#1e293b', color: '#a5b4fc', borderRadius: 4, padding: '2px 8px', marginRight: 6, fontSize: 11 }}>{e}</span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )
+            })()}
 
             {/* Search — above the lineage */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -441,6 +575,36 @@ export default function DashboardPage() {
                     <Controls showInteractive={false} />
                 </ReactFlow>
             </div>
+            <ChatPanel snapshotId={snapshotId} />
+
+            {/* Regen progress toast */}
+            {regenStatus === 'running' && (
+                <div style={{
+                    position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+                    background: '#1e293b', border: '1px solid #334155', borderRadius: 12,
+                    padding: '16px 24px', zIndex: 1000, minWidth: 360, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                }}>
+                    <div style={{ color: '#a5b4fc', fontWeight: 600, marginBottom: 8 }}>
+                        ⚡ Generating AI Documentation
+                    </div>
+                    <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 8 }}>
+                        {regenProgress.total > 0
+                            ? `Table ${regenProgress.progress}/${regenProgress.total}: ${regenProgress.currentTable}`
+                            : regenProgress.currentTable || 'Starting...'}
+                    </div>
+                    <div style={{ height: 4, background: '#0f172a', borderRadius: 2 }}>
+                        <div style={{
+                            height: '100%',
+                            width: regenProgress.total > 0
+                                ? `${Math.round((regenProgress.progress / regenProgress.total) * 100)}%`
+                                : '15%',
+                            background: 'linear-gradient(90deg, #6366f1, #a5b4fc)',
+                            borderRadius: 2,
+                            transition: 'width 0.5s ease',
+                        }} />
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

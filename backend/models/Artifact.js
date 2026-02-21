@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const ArtifactSchema = new mongoose.Schema({
     snapshotId: { type: mongoose.Schema.Types.ObjectId, ref: 'Snapshot' },
+    connectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Connection' },
     connectionName: String,
     format: { type: String, enum: ['json', 'markdown'] },
     content: String,

@@ -24,7 +24,6 @@ export default function App() {
                 <Route path="/artifacts" element={<ArtifactsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
-            <ChatPanel snapshotId={currentSnapshotId} />
         </BrowserRouter>
     )
 }

@@ -158,14 +158,41 @@ app.post('/api/snapshots/:id/regenerate', async (req, res) => {
         const snapshot = await Snapshot.findById(req.params.id);
         if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
 
-        await axios.post(`${PYTHON_SERVICE}/generate-docs/${req.params.id}`, {});
+        // Fire-and-forget — FastAPI reads mongo_uri from its own .env
+        await axios.post(
+            `${PYTHON_SERVICE}/generate-docs/${req.params.id}`,
+            {},
+            { timeout: 10000 }
+        );
+
         res.json({
             success: true,
-            message: 'AI regeneration started',
+            message: 'AI regeneration started. Poll /doc-status for progress.',
             pollUrl: `/api/snapshots/${req.params.id}/doc-status`,
+            snapshotId: req.params.id,
         });
     } catch (err) {
         const detail = err.response?.data?.detail || err.message;
+        console.error('[REGEN] Error:', detail);
+        res.status(500).json({ error: detail });
+    }
+});
+
+app.post('/api/snapshots/:id/re-embed', async (req, res) => {
+    try {
+        const snapshot = await Snapshot.findById(req.params.id);
+        if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
+
+        const pyRes = await axios.post(`${PYTHON_SERVICE}/re-embed/${req.params.id}`);
+
+        res.json({
+            success: true,
+            tablesIndexed: pyRes.data.tablesIndexed,
+            message: 'Embeddings re-indexed successfully.',
+        });
+    } catch (err) {
+        const detail = err.response?.data?.detail || err.response?.data?.message || err.message;
+        console.error('[RE-EMBED] Error:', detail);
         res.status(500).json({ error: detail });
     }
 });
@@ -274,8 +301,12 @@ app.get('/api/artifacts/:id/download', async (req, res) => {
 app.post('/api/snapshots/:id/chat', async (req, res) => {
     try {
         const { question, sessionId } = req.body;
-        const sid = sessionId || uuidv4();
 
+        if (!question || question.trim() === '') {
+            return res.status(400).json({ error: 'Question is required' });
+        }
+
+        const sid = sessionId || uuidv4();
         if (!chatSessions[sid]) chatSessions[sid] = [];
         const history = chatSessions[sid];
 
@@ -283,7 +314,7 @@ app.post('/api/snapshots/:id/chat', async (req, res) => {
             question,
             snapshotId: req.params.id,
             history: history.slice(-20),
-        });
+        }, { timeout: 60000 }); // 60 second timeout for AI response
 
         const { answer, sourceTables } = pyRes.data;
 
@@ -293,7 +324,33 @@ app.post('/api/snapshots/:id/chat', async (req, res) => {
 
         res.json({ answer, sourceTables, sessionId: sid });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        const detail = err.response?.data?.detail || err.response?.data || err.message;
+        console.error('[CHAT] Error:', JSON.stringify(detail));
+        res.status(500).json({
+            error: 'Chat failed',
+            detail: typeof detail === 'string' ? detail : JSON.stringify(detail)
+        });
+    }
+});
+
+
+app.post('/api/snapshots/:id/table-overview/:tableName', async (req, res) => {
+    try {
+        const snapshot = await Snapshot.findById(req.params.id);
+        if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
+
+        const table = snapshot.tables.find(t => t.name === req.params.tableName);
+        if (!table) return res.status(404).json({ error: 'Table not found' });
+
+        const pyRes = await axios.post(
+            `${PYTHON_SERVICE}/table-overview`,
+            { table, snapshotId: req.params.id },
+            { timeout: 30000 }
+        );
+        res.json(pyRes.data);
+    } catch (err) {
+        const detail = err.response?.data?.detail || err.message;
+        res.status(500).json({ error: detail });
     }
 });
 

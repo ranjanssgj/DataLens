@@ -50,6 +50,7 @@ async function exportJson(snapshotId) {
 
     const artifact = await Artifact.create({
         snapshotId,
+        connectionId: snapshot.connectionId,
         connectionName: snapshot.connectionName,
         format: 'json',
         content,
@@ -185,6 +186,7 @@ async function exportMarkdown(snapshotId) {
 
     const artifact = await Artifact.create({
         snapshotId,
+        connectionId: snapshot.connectionId,
         connectionName: snapshot.connectionName,
         format: 'markdown',
         content,
