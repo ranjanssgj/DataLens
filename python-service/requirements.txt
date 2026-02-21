@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+pymongo
+psycopg2-binary
+mysql-connector-python
+pyodbc
+snowflake-connector-python
+pandas
+numpy
+scipy
+google-generativeai
+qdrant-client
+python-dotenv
