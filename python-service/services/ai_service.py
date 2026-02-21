@@ -28,8 +28,10 @@ def init_ai():
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
     genai.configure(api_key=api_key)
-    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    return QdrantClient(url=qdrant_url)
+    return QdrantClient(
+        url=os.getenv("QDRANT_URL", "http://localhost:6333"),
+        api_key=os.getenv("QDRANT_API_KEY")
+    )
 
 
 def ensure_qdrant_collection(qdrant: QdrantClient):
