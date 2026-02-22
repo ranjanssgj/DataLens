@@ -18,6 +18,9 @@ from qdrant_client.models import (
 from bson import ObjectId
 
 
+_MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/datalens")
+_mongo_client = pymongo.MongoClient(_MONGO_URI)
+
 QDRANT_COLLECTION = "table_docs"
 VECTOR_SIZE = 768  # text-embedding-004 native output size
 
@@ -210,19 +213,23 @@ def generate_docs_background(snapshot_id: str, mongo_uri: str):
     """
     job_status[snapshot_id] = {"status": "running", "progress": 0, "total": 0, "currentTable": "Connecting..."}
 
-    mongo_client = None
     try:
         gemini, qdrant = init_ai()
         ensure_qdrant_collection(qdrant)
 
-        mongo_client = pymongo.MongoClient(mongo_uri)
-        db = mongo_client["datalens"]
+        db = _mongo_client["datalens"]
         snapshots_col = db["snapshots"]
 
-        snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+        snapshot = None
+        for _ in range(5):
+            snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+            if snapshot:
+                break
+            time.sleep(2)
+
         if not snapshot:
             job_status[snapshot_id] = {"status": "failed", "progress": 0, "total": 0, "currentTable": "Snapshot not found"}
-            return
+            raise ValueError(f"Snapshot {snapshot_id} not found")
 
         tables = snapshot.get("tables", [])
         total = len(tables)
@@ -387,11 +394,7 @@ Document ALL {len(tables)} tables."""
         print(f"[AI] Fatal error for snapshot {snapshot_id}: {e}")
         job_status[snapshot_id] = {"status": "failed", "progress": 0, "total": 0, "currentTable": str(e)}
     finally:
-        if mongo_client:
-            try:
-                mongo_client.close()
-            except Exception:
-                pass
+        pass
 
 
 def re_embed_snapshot(snapshot_id: str, mongo_uri: str) -> dict:
@@ -402,15 +405,19 @@ def re_embed_snapshot(snapshot_id: str, mongo_uri: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": f"AI service initialization failed: {str(e)}"}
 
-    mongo_client = None
     try:
-        mongo_client = pymongo.MongoClient(mongo_uri)
-        db = mongo_client["datalens"]
+        db = _mongo_client["datalens"]
         snapshots_col = db["snapshots"]
 
-        snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+        snapshot = None
+        for _ in range(5):
+            snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+            if snapshot:
+                break
+            time.sleep(2)
+
         if not snapshot:
-            return {"status": "error", "message": "Snapshot not found"}
+            raise ValueError(f"Snapshot {snapshot_id} not found")
 
         tables = snapshot.get("tables", [])
         if not tables:
@@ -477,11 +484,7 @@ def re_embed_snapshot(snapshot_id: str, mongo_uri: str) -> dict:
         print(f"[AI] Fatal error during RE-EMBED for snapshot {snapshot_id}: {e}")
         return {"status": "error", "message": str(e)}
     finally:
-        if mongo_client:
-            try:
-                mongo_client.close()
-            except Exception:
-                pass
+        pass
 
 
 def rag_chat(question: str, snapshot_id: str, history: list, mongo_uri: str) -> dict:

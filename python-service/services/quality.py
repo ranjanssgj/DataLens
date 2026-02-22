@@ -3,7 +3,11 @@ import numpy as np
 from scipy import stats as scipy_stats
 import pymongo
 import os
+import time
 from bson import ObjectId
+
+_MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/datalens")
+_mongo_client = pymongo.MongoClient(_MONGO_URI)
 
 
 def run_quality_analysis(snapshot_id: str, credentials: dict):
@@ -11,14 +15,17 @@ def run_quality_analysis(snapshot_id: str, credentials: dict):
     Run quality analysis for all tables in a snapshot.
     Writes results directly to MongoDB snapshot document.
     """
-    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/datalens")
-    client = pymongo.MongoClient(mongo_uri)
-    db = client["datalens"]
+    db = _mongo_client["datalens"]
     snapshots_col = db["snapshots"]
 
-    snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+    snapshot = None
+    for _ in range(5):
+        snapshot = snapshots_col.find_one({"_id": ObjectId(snapshot_id)})
+        if snapshot:
+            break
+        time.sleep(2)
+
     if not snapshot:
-        client.close()
         raise ValueError(f"Snapshot {snapshot_id} not found")
 
     db_type = snapshot.get("dbType")
@@ -153,7 +160,6 @@ def run_quality_analysis(snapshot_id: str, credentials: dict):
             "qualityAnalyzedAt": pd.Timestamp.now().isoformat(),
         }}
     )
-    client.close()
     return len(updated_tables)
 
 
