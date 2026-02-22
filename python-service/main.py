@@ -31,26 +31,26 @@ async def lifespan(app: FastAPI):
     missing = [v for v in required_vars if not os.getenv(v)]
 
     if missing:
-        print(f"[STARTUP] ⚠️  Missing environment variables: {', '.join(missing)}")
+        print(f"[STARTUP] Missing environment variables: {', '.join(missing)}")
         print(f"[STARTUP]    Check python-service/.env")
     else:
         key = os.getenv("GEMINI_API_KEY", "")
-        print(f"[STARTUP] ✅ GEMINI_API_KEY loaded: {key[:8]}...")
-        print(f"[STARTUP] ✅ MONGO_URI: {os.getenv('MONGO_URI', '')[:40]}...")
-        print(f"[STARTUP] ✅ QDRANT_URL: {os.getenv('QDRANT_URL')}")
+        print(f"[STARTUP] GEMINI_API_KEY loaded: {key[:8]}...")
+        print(f"[STARTUP] MONGO_URI: {os.getenv('MONGO_URI', '')[:40]}...")
+        print(f"[STARTUP] QDRANT_URL: {os.getenv('QDRANT_URL')}")
 
     provider = os.getenv("AI_PROVIDER", "groq")
-    print(f"[STARTUP] ✅ AI_PROVIDER: {provider.upper()}")
+    print(f"[STARTUP] AI_PROVIDER: {provider.upper()}")
     if provider == "groq":
         groq_key = os.getenv("GROQ_API_KEY", "")
-        print(f"[STARTUP] ✅ GROQ_API_KEY loaded: {groq_key[:8]}..." if groq_key else "[STARTUP] ⚠️  GROQ_API_KEY not set")
+        print(f"[STARTUP] GROQ_API_KEY loaded: {groq_key[:8]}..." if groq_key else "[STARTUP]  GROQ_API_KEY not set")
 
     try:
         _, qdrant = init_ai()
         ensure_qdrant_collection(qdrant)
-        print("[STARTUP] ✅ Qdrant collection verified")
+        print("[STARTUP] Qdrant collection verified")
     except Exception as e:
-        print(f"[STARTUP] ⚠️  Qdrant init failed: {e}")
+        print(f"[STARTUP]   Qdrant init failed: {e}")
 
     yield  # App runs here
 
